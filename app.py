@@ -1,9 +1,11 @@
 import rumps
 import threading
+import json
+import os
 from pydexcom import Dexcom
 from pydexcom.errors import AccountError
 
-# Import Cocoa classes from PyObjC for custom UI and to hide the dock icon.
+# Import Cocoa classes for custom dialogs and to hide the dock icon.
 from Cocoa import (
     NSAlert,
     NSTextField,
@@ -11,14 +13,56 @@ from Cocoa import (
     NSPopUpButton,
     NSView,
     NSMakeRect,
-    NSModalResponseOK,
     NSAlertFirstButtonReturn,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSColor,
     NSAttributedString,
     NSFont,
+    NSAlertStyleInformational,
 )
+
+SETTINGS_FILE = "settings.json"
+
+# ----- Persistent Settings Functions -----
+
+def load_settings():
+    """Load settings from SETTINGS_FILE, or return defaults if file not found."""
+    defaults = {
+        "username": "",
+        "password": "",
+        "region": "us",
+        "style_settings": {
+            "number_low": "Low: %s",
+            "number_normal": "Normal: %s",
+            "number_high": "High: %s",
+            "arrow_steady": "→",
+            "arrow_rising": "↑",
+            "arrow_falling": "↓",
+            "show_brackets": True
+        },
+        "preferences": {
+            "low_threshold": 70.0,
+            "high_threshold": 180.0,
+            "notifications": True
+        }
+    }
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print("Error loading settings:", e)
+            return defaults
+    return defaults
+
+def save_settings(settings):
+    """Save settings to SETTINGS_FILE."""
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f)
+    except Exception as e:
+        print("Error saving settings:", e)
 
 # ----- Custom Dialogs -----
 
@@ -124,7 +168,6 @@ def get_style_settings(current_style):
     height = 200
     accessory = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, width, height))
     
-    # We'll create 7 labels and text fields.
     labels = ["Low Number Style:", "Normal Number Style:", "High Number Style:",
               "Steady Arrow:", "Rising Arrow:", "Falling Arrow:", "Show Brackets (true/false):"]
     keys = ["number_low", "number_normal", "number_high",
@@ -140,7 +183,6 @@ def get_style_settings(current_style):
         label.setBezeled_(False)
         label.setDrawsBackground_(False)
         field = NSTextField.alloc().initWithFrame_(NSMakeRect(160, y_start - i*delta, 180, 22))
-        # Set default value from current_style or fallback defaults
         default = current_style.get(keys[i], "") if current_style else ""
         field.setStringValue_(default)
         accessory.addSubview_(label)
@@ -153,7 +195,6 @@ def get_style_settings(current_style):
         new_style = {}
         for key, field in fields.items():
             val = str(field.stringValue())
-            # For show_brackets, convert to boolean.
             if key == "show_brackets":
                 new_style[key] = (val.lower() == "true")
             else:
@@ -222,22 +263,15 @@ def get_preferences(current_prefs):
 
 class DexcomMenuApp(rumps.App):
     def __init__(self):
-        # Hide Dock icon by setting activation policy
+        # Hide Dock icon.
         NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
-        # Use an icon file if desired; to hide the icon in the dock, you might set a transparent image.
-        super(DexcomMenuApp, self).__init__("Dexcom")  # Title in the menu bar.
-        # Account settings
-        self.username = None
-        self.password = None
-        self.region = "us"  # "us", "ous", "jp"
-        self.dexcom = None
-
-        # Data display
-        self.current_value = None
-        self.current_trend_arrow = None
-
-        # Default style settings
-        self.style_settings = {
+        super(DexcomMenuApp, self).__init__("Dexcom")
+        # Load settings or use defaults.
+        settings = load_settings()
+        self.username = settings.get("username", "")
+        self.password = settings.get("password", "")
+        self.region = settings.get("region", "us")
+        self.style_settings = settings.get("style_settings", {
             "number_low": "Low: %s",
             "number_normal": "Normal: %s",
             "number_high": "High: %s",
@@ -245,14 +279,17 @@ class DexcomMenuApp(rumps.App):
             "arrow_rising": "↑",
             "arrow_falling": "↓",
             "show_brackets": True
-        }
-
-        # Default preferences
-        self.preferences = {
+        })
+        self.preferences = settings.get("preferences", {
             "low_threshold": 70.0,
             "high_threshold": 180.0,
             "notifications": True
-        }
+        })
+        self.dexcom = None
+
+        # Data display
+        self.current_value = None
+        self.current_trend_arrow = None
 
         # Build menu items
         self.menu.clear()
@@ -271,9 +308,8 @@ class DexcomMenuApp(rumps.App):
         else:
             self.authenticate()
 
-        # Fetch data immediately
+        # Fetch data immediately and start a timer to update every 5 minutes.
         self.update_data()
-        # Timer to update every 300 seconds (5 minutes)
         timer = rumps.Timer(self.update_data, 300)
         timer.start()
 
@@ -284,6 +320,7 @@ class DexcomMenuApp(rumps.App):
             return
         self.username, self.password, self.region = creds
         self.authenticate()
+        self.persist_settings()
 
     def open_style_settings(self, _):
         new_style = get_style_settings(self.style_settings)
@@ -291,6 +328,7 @@ class DexcomMenuApp(rumps.App):
             self.style_settings = new_style
             rumps.alert("Style Updated", "New style settings have been applied.")
             self.refresh_display()
+            self.persist_settings()
 
     def open_preferences(self, _):
         new_prefs = get_preferences(self.preferences)
@@ -298,6 +336,7 @@ class DexcomMenuApp(rumps.App):
             self.preferences = new_prefs
             rumps.alert("Preferences Updated", "New preferences have been applied.")
             self.refresh_display()
+            self.persist_settings()
 
     def authenticate(self):
         try:
@@ -321,8 +360,7 @@ class DexcomMenuApp(rumps.App):
             reading = self.dexcom.get_current_glucose_reading()
             if reading is not None:
                 self.current_value = reading.value
-                self.current_trend_arrow = reading.trend_arrow  # default from pydexcom
-                # Optionally override with style settings based on thresholds:
+                self.current_trend_arrow = reading.trend_arrow
                 try:
                     value = float(self.current_value)
                 except:
@@ -336,7 +374,6 @@ class DexcomMenuApp(rumps.App):
                 else:
                     number_format = self.style_settings["number_normal"]
                     arrow_override = self.style_settings["arrow_steady"]
-                # Build display text
                 number_text = number_format % self.current_value
                 if self.style_settings.get("show_brackets", True):
                     display_text = f"[{number_text}][{arrow_override}]"
@@ -347,12 +384,10 @@ class DexcomMenuApp(rumps.App):
         except Exception as e:
             print("Error fetching Dexcom data:", e)
             display_text = "[Err][?]"
-        # Update display on main thread
         from Cocoa import NSOperationQueue
         NSOperationQueue.mainQueue().addOperationWithBlock_(lambda: self.refresh_display_with_text(display_text))
 
     def refresh_display_with_text(self, text):
-        # Apply text attributes; here you can add custom colors if desired.
         try:
             value = float(self.current_value)
         except:
@@ -361,13 +396,21 @@ class DexcomMenuApp(rumps.App):
         attributes = {"NSForegroundColorAttributeName": color,
                       "NSFont": NSFont.systemFontOfSize_(12)}
         attributed_title = NSAttributedString.alloc().initWithString_attributes_(text, attributes)
-        # If available, set on status bar button; otherwise, update self.title.
         if hasattr(self, '_status_item') and self._status_item.button:
             self._status_item.button.setAttributedTitle_(attributed_title)
         else:
             self.title = text
 
+    def persist_settings(self):
+        settings = {
+            "username": self.username,
+            "password": self.password,
+            "region": self.region,
+            "style_settings": self.style_settings,
+            "preferences": self.preferences
+        }
+        save_settings(settings)
+
 if __name__ == "__main__":
-    # Hide dock icon.
     NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     DexcomMenuApp().run()
