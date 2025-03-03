@@ -1,0 +1,4 @@
+pydexcom==0.4.1
+pyobjc_framework_Cocoa==11.0
+rumps==0.4.0
+setuptools==58.0.4

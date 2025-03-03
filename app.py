@@ -14,17 +14,27 @@ from Cocoa import (
     NSModalResponseOK,
     NSApplication,
     NSAlertFirstButtonReturn,
+    NSColor,
+    NSAttributedString,
+    NSFont,
 )
 
-def get_credentials():
+def get_credentials(current_reading=None):
     """
     Show a custom Cocoa dialog with three fields:
       - Username (text field)
       - Password (secure text field)
       - Region (popup button with "us", "ous", "jp")
+    Optionally, show the current reading at the bottom.
     Returns a tuple (username, password, region) if OK is pressed,
     or (None, None, None) if cancelled.
     """
+    # Determine accessory view height based on whether we show the current reading.
+    if current_reading is not None:
+        accessory_height = 150
+    else:
+        accessory_height = 120
+
     # Activate the app to ensure the alert is in focus.
     app = NSApplication.sharedApplication()
     app.activateIgnoringOtherApps_(True)
@@ -36,40 +46,51 @@ def get_credentials():
     alert.addButtonWithTitle_("Cancel")
     
     # Create accessory view with enough space for our fields
-    width, height = 300, 120
-    accessory = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, width, height))
+    width = 300
+    accessory = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, width, accessory_height))
     
+    # Adjust layout depending on whether current_reading is provided.
+    if current_reading is not None:
+        username_y = 100
+        password_y = 70
+        region_y = 40
+        reading_y = 10
+    else:
+        username_y = 80
+        password_y = 50
+        region_y = 20
+
     # Username label and text field
-    username_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 80, 80, 22))
+    username_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, username_y, 80, 22))
     username_label.setStringValue_("Username:")
     username_label.setEditable_(False)
     username_label.setBezeled_(False)
     username_label.setDrawsBackground_(False)
     
-    username_field = NSTextField.alloc().initWithFrame_(NSMakeRect(90, 80, 200, 22))
+    username_field = NSTextField.alloc().initWithFrame_(NSMakeRect(90, username_y, 200, 22))
     username_field.setEditable_(True)
     username_field.setStringValue_("")
     username_field.becomeFirstResponder()  # set focus on username field
     
     # Password label and secure text field
-    password_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 50, 80, 22))
+    password_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, password_y, 80, 22))
     password_label.setStringValue_("Password:")
     password_label.setEditable_(False)
     password_label.setBezeled_(False)
     password_label.setDrawsBackground_(False)
     
-    password_field = NSSecureTextField.alloc().initWithFrame_(NSMakeRect(90, 50, 200, 22))
+    password_field = NSSecureTextField.alloc().initWithFrame_(NSMakeRect(90, password_y, 200, 22))
     password_field.setEditable_(True)
     password_field.setStringValue_("")
     
     # Region label and popup button
-    region_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 20, 80, 22))
+    region_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, region_y, 80, 22))
     region_label.setStringValue_("Region:")
     region_label.setEditable_(False)
     region_label.setBezeled_(False)
     region_label.setDrawsBackground_(False)
     
-    region_popup = NSPopUpButton.alloc().initWithFrame_(NSMakeRect(90, 20, 200, 22))
+    region_popup = NSPopUpButton.alloc().initWithFrame_(NSMakeRect(90, region_y, 200, 22))
     region_popup.addItemsWithTitles_(["us", "ous", "jp"])
     region_popup.selectItemAtIndex_(0)  # default to "us"
     
@@ -80,6 +101,24 @@ def get_credentials():
     accessory.addSubview_(password_field)
     accessory.addSubview_(region_label)
     accessory.addSubview_(region_popup)
+    
+    # If a current reading is provided, add a label for it.
+    if current_reading is not None:
+        reading_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, reading_y, width, 22))
+        reading_label.setEditable_(False)
+        reading_label.setBezeled_(False)
+        reading_label.setDrawsBackground_(False)
+        # Set text color based on reading value
+        try:
+            value = float(current_reading)
+        except (ValueError, TypeError):
+            value = 0
+        if value > 170:
+            reading_label.setTextColor_(NSColor.redColor())
+        else:
+            reading_label.setTextColor_(NSColor.blackColor())
+        reading_label.setStringValue_(f"Current Reading: {current_reading}")
+        accessory.addSubview_(reading_label)
     
     alert.setAccessoryView_(accessory)
     
@@ -95,7 +134,8 @@ def get_credentials():
 
 class DexcomMenuApp(rumps.App):
     def __init__(self):
-        super(DexcomMenuApp, self).__init__("Dexcom")
+        # Provide a custom icon for the app logo.
+        super(DexcomMenuApp, self).__init__("Dexcom", icon="icon.png")
         # In-memory credentials; consider persisting these securely.
         self.username = None
         self.password = None
@@ -131,15 +171,17 @@ class DexcomMenuApp(rumps.App):
         """Display the custom sign-in UI for credentials."""
         creds = get_credentials()
         if creds[0] is None or creds[1] == "":
-            print("DEBUG: Username:", creds[0], "Password length:", len(creds[1]) if creds[1] else 0, "Region:", creds[2])
+            print("DEBUG: Username:", creds[0],
+                  "Password length:", len(creds[1]) if creds[1] else 0,
+                  "Region:", creds[2])
             rumps.alert("Setup Cancelled", "Credentials are required.")
             rumps.quit_application()
         self.username, self.password, self.region = creds
         self.authenticate()
 
     def open_settings(self, _):
-        """Display the custom dialog for updating credentials."""
-        creds = get_credentials()
+        """Display the custom dialog for updating credentials with current reading shown."""
+        creds = get_credentials(current_reading=self.current_value)
         if creds[0] is not None and creds[1] != "":
             self.username, self.password, self.region = creds
             self.authenticate()
@@ -182,8 +224,23 @@ class DexcomMenuApp(rumps.App):
         NSOperationQueue.mainQueue().addOperationWithBlock_(self.refresh_display)
 
     def refresh_display(self):
-        """Update the menu bar title with the current glucose reading."""
-        self.title = f"[{self.current_value}][{self.current_trend_arrow}]"
+        """Update the menu bar title with the current glucose reading,
+           highlighting the number in red if over 170."""
+        text = f"[{self.current_value}][{self.current_trend_arrow}]"
+        # Determine text color based on the glucose value.
+        try:
+            value = float(self.current_value)
+        except (ValueError, TypeError):
+            value = 0
+        color = NSColor.redColor() if value > 170 else NSColor.blackColor()
+        attributes = {"NSForegroundColorAttributeName": color,
+                      "NSFont": NSFont.systemFontOfSize_(12)}
+        attributed_title = NSAttributedString.alloc().initWithString_attributes_(text, attributes)
+        # Set the attributed title on the status bar button (available on macOS 10.10+).
+        if hasattr(self, '_status_item') and self._status_item.button:
+            self._status_item.button.setAttributedTitle_(attributed_title)
+        else:
+            self.title = text
 
 if __name__ == "__main__":
     DexcomMenuApp().run()
