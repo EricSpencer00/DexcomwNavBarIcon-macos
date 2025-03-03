@@ -1,3 +1,5 @@
+[![GitHub Pages and Release PDF](https://github.com/EricSpencer00/DexcomNavBarIcon-macos/workflows/main.yml/badge.svg)]
+
 ![Icon](icon.png)
 
 Dexcom Navigation Bar Icon on MacOS
