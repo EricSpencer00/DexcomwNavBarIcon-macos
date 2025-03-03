@@ -1,0 +1,3 @@
+hdiutil create -volname DexcomNavBarIcon -srcfolder dist/app.app -ov -format UDZO DexcomNavBarIcon.dmg
+python setup.py py2app -A
+python setup.py py2app  
