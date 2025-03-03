@@ -1,4 +1,4 @@
-![Build macOS DMG](https://github.com/EricSpencer00/DexcomNavBarIcon-macos/workflows/main.yml/badge.svg)
+![Build macOS DMG](https://github.com/EricSpencer00/DexcomNavBarIcon-macos/.github/workflows/main.yml/badge.svg)
 
 ![Icon](icon.png)
 
